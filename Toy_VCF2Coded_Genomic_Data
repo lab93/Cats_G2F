@@ -1,47 +1,72 @@
-if (!requireNamespace("BiocManager", quietly=TRUE))
-  install.packages("BiocManager")
-BiocManager::install("SNPRelate")
-
 # Load necessary libraries
 library(SNPRelate)
+library(ggplot2)
 
 # Define the function
-get_snp = function(vcf_fn, gds_fn, ld_threshold = 0.3, save_as_csv = FALSE, output_file = "genotype_data") {
+get_snp = function(vcf_fn, gds_fn, ld_threshold = 0.3, maf_threshold = 0.1, save_as_csv = FALSE, output_file = "genotype_data") {
   # Convert the filtered VCF to GDS format
   snpgdsVCF2GDS(vcf_fn, gds_fn, method = "biallelic.only")
+  
   # Open the GDS file
   genofile = snpgdsOpen(gds_fn)
-  # LD pruning
+  
+  # Extract SNP allele frequency information
+  snp_summary = snpgdsSNPList(genofile)
+  allele_freq = snp_summary$afreq  # Extract allele frequencies
+  
+  # Plot histogram of allele frequencies
+  ggplot(data.frame(allele_freq), aes(x = allele_freq)) +
+    geom_histogram(binwidth = 0.01, color = "black", fill = "skyblue") +
+    labs(title = "Histogram of Allele Frequencies", x = "Allele Frequency", y = "Count") +
+    theme_minimal()
+  
+  # Filter SNPs based on MAF threshold (0.1)
+  maf_filter = which(allele_freq >= maf_threshold & allele_freq <= (1 - maf_threshold))
+  cat("Number of SNPs after MAF filtering:", length(maf_filter), "\n")
+  
+  # LD pruning (on SNPs that pass the MAF filter)
   set.seed(1000)
-  ld_pruned_snps = snpgdsLDpruning(genofile, ld.threshold = ld_threshold)
+  ld_pruned_snps = snpgdsLDpruning(genofile, ld.threshold = ld_threshold, snp.id = snp_summary$snp.id[maf_filter])
+  
   # Get pruned SNP IDs
   pruned_snp_ids = unlist(ld_pruned_snps)
+  
   # Extract the genotype matrix for pruned SNPs
   genotype_matrix = snpgdsGetGeno(genofile, snp.id = pruned_snp_ids)
+  
   # Convert the genotype matrix to a data frame
   genotype_df = as.data.frame(genotype_matrix)
+  
   # Get sample IDs (genotype names)
   sample_info = snpgdsSummary(genofile)
   sample_ids = sample_info$sample.id
+  
   # Set row names (genotypes) using the sample IDs
   rownames(genotype_df) = sample_ids
+  
   # Extract SNP information
   snp_info = snpgdsSNPList(genofile)
-  # Extract relevant details
+  
+  # Extract relevant details for pruned SNPs
   snp_details = data.frame(
     snp.id = snp_info$snp.id,
     chromosome = snp_info$chromosome,
     position = snp_info$position,
     allele = snp_info$allele
   )
+  
   # Filter to include only pruned SNPs
   snp_details = snp_details[snp_details$snp.id %in% pruned_snp_ids, ]
+  
   # Create combined column names
   combined_colnames = paste(snp_details$snp.id, snp_details$chromosome, snp_details$position, sep = "-")
+  
   # Set the combined column names to the genotype data frame
   colnames(genotype_df) = combined_colnames
+  
   # Convert to numeric matrix
   genotype_numeric_matrix = as.matrix(genotype_df)
+  
   # Save the matrix in the specified format
   if (save_as_csv) {
     write.csv(genotype_numeric_matrix, file = paste0(output_file, ".csv"), row.names = TRUE)
@@ -50,16 +75,33 @@ get_snp = function(vcf_fn, gds_fn, ld_threshold = 0.3, save_as_csv = FALSE, outp
     save(genotype_numeric_matrix, file = paste0(output_file, ".RData"), version = 2)
     cat("Genotype data saved as '", output_file, ".RData'.\n", sep = "")
   }
+  
   # Close the GDS file
+  snpgdsClose(genofile)
+  
+  # Dendrogram generation
+  genofile = snpgdsOpen(gds_fn)
+  sample_ids = snpgdsSummary(genofile)$sample.id
+  
+  # Calculate the IBS (Identity by State) matrix
+  ibs_result = snpgdsIBS(genofile, snp.id = pruned_snp_ids, sample.id = sample_ids, num.thread = 2)
+  
+  # Perform hierarchical clustering with sample IDs
+  hc = snpgdsHCluster(ibs_result, sample.id = sample_ids)
+  
+  # Plot dendrogram using snpgdsDrawTree
+  snpgdsDrawTree(hc, main = "Dendrogram of Genetic Relatedness")
+  
+  # Close the GDS file again
   snpgdsClose(genofile)
 }
 
-
 # Example of using the function
 get_snp(
-  vcf_fn = "5_Genotype_Data_All_Years.vcf", #van be changed to other files names
-  gds_fn = "5_Genotype_Data_All_Years.gds", #Can be change to other names
+  vcf_fn = "5_Genotype_Data_All_Years.vcf", #adjust for you data file name
+  gds_fn = "5_Genotype_Data_All_Years.gds", #adjust for you data file name
   ld_threshold = 0.3,        # Set your desired LD threshold
-  save_as_csv = FALSE,        # Change to TRUE to save as CSV, FALSE for RData
-  output_file = "X"  # Change to your desired output file name
+  maf_threshold = 0.01,       # MAF threshold for filtering
+  save_as_csv = FALSE,       # Change to TRUE to save as CSV, FALSE for RData
+  output_file = "X"          # Change to your desired output file name
 )
