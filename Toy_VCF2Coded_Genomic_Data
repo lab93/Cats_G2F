@@ -1,0 +1,65 @@
+if (!requireNamespace("BiocManager", quietly=TRUE))
+  install.packages("BiocManager")
+BiocManager::install("SNPRelate")
+
+# Load necessary libraries
+library(SNPRelate)
+
+# Define the function
+get_snp = function(vcf_fn, gds_fn, ld_threshold = 0.3, save_as_csv = FALSE, output_file = "genotype_data") {
+  # Convert the filtered VCF to GDS format
+  snpgdsVCF2GDS(vcf_fn, gds_fn, method = "biallelic.only")
+  # Open the GDS file
+  genofile = snpgdsOpen(gds_fn)
+  # LD pruning
+  set.seed(1000)
+  ld_pruned_snps = snpgdsLDpruning(genofile, ld.threshold = ld_threshold)
+  # Get pruned SNP IDs
+  pruned_snp_ids = unlist(ld_pruned_snps)
+  # Extract the genotype matrix for pruned SNPs
+  genotype_matrix = snpgdsGetGeno(genofile, snp.id = pruned_snp_ids)
+  # Convert the genotype matrix to a data frame
+  genotype_df = as.data.frame(genotype_matrix)
+  # Get sample IDs (genotype names)
+  sample_info = snpgdsSummary(genofile)
+  sample_ids = sample_info$sample.id
+  # Set row names (genotypes) using the sample IDs
+  rownames(genotype_df) = sample_ids
+  # Extract SNP information
+  snp_info = snpgdsSNPList(genofile)
+  # Extract relevant details
+  snp_details = data.frame(
+    snp.id = snp_info$snp.id,
+    chromosome = snp_info$chromosome,
+    position = snp_info$position,
+    allele = snp_info$allele
+  )
+  # Filter to include only pruned SNPs
+  snp_details = snp_details[snp_details$snp.id %in% pruned_snp_ids, ]
+  # Create combined column names
+  combined_colnames = paste(snp_details$snp.id, snp_details$chromosome, snp_details$position, sep = "-")
+  # Set the combined column names to the genotype data frame
+  colnames(genotype_df) = combined_colnames
+  # Convert to numeric matrix
+  genotype_numeric_matrix = as.matrix(genotype_df)
+  # Save the matrix in the specified format
+  if (save_as_csv) {
+    write.csv(genotype_numeric_matrix, file = paste0(output_file, ".csv"), row.names = TRUE)
+    cat("Genotype data saved as '", output_file, ".csv'.\n", sep = "")
+  } else {
+    save(genotype_numeric_matrix, file = paste0(output_file, ".RData"), version = 2)
+    cat("Genotype data saved as '", output_file, ".RData'.\n", sep = "")
+  }
+  # Close the GDS file
+  snpgdsClose(genofile)
+}
+
+
+# Example of using the function
+get_snp(
+  vcf_fn = "5_Genotype_Data_All_Years.vcf", #van be changed to other files names
+  gds_fn = "5_Genotype_Data_All_Years.gds", #Can be change to other names
+  ld_threshold = 0.3,        # Set your desired LD threshold
+  save_as_csv = FALSE,        # Change to TRUE to save as CSV, FALSE for RData
+  output_file = "X"  # Change to your desired output file name
+)
